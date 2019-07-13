@@ -1,0 +1,135 @@
+
+
+#-----------------------------------
+# Vagrant/Virtualbox variables
+#-----------------------------------
+VAGRANT_MACHINE_NAME = "DEVBox"         # Set the machine name (this is the name that will show in boot log)
+VAGRANT_BOX          = "precise32" 
+VAGRANT_BOX_URL      = "http://files.vagrantup.com/precise32.box"
+
+BOX_HOSTNAME   = "MegapathSync"
+BOX_PRIVATE_IP = "192.168.33.104"
+BOX_TIMEZONE   = "America/Phoenix"
+
+WWW_ROOT       = "repos/"            # What to mount to /var/www on VM. Relative to this directory
+
+VAGRANTFILE_API_VERSION = "2"
+
+#--------------------------------------------
+# Vagrant Run
+#--------------------------------------------
+puts "Host Name : #{BOX_HOSTNAME}"
+puts "Ip Address: #{BOX_PRIVATE_IP}"
+
+Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
+
+    #---------PLUGIN: Cachier------------------------------
+    if Vagrant.has_plugin?("vagrant-cachier")
+        # Configure cached packages to be shared between instances of the same base box.
+        # Usage docs: http://fgrehm.viewdocs.io/vagrant-cachier/usage
+        config.cache.scope = :box
+
+        # --Enable for Linux--
+        #config.cache.synced_folder_opts = {
+        #    type: :nfs,
+        #    mount_options: ['rw', 'vers=3', 'tcp', 'nolock']
+        #}
+    end
+
+    #---------PLUGIN: VBGuest------------------------------
+    if Vagrant.has_plugin?("vagrant-vbguest")
+        # do NOT download the iso file from a webserver
+        config.vbguest.no_remote = true
+        # set auto_update to false, if you do NOT want to check the correct
+        config.vbguest.auto_update = true
+        # set to false to install the update. set to true to just check
+        config.vbguest.no_install = true
+    end
+
+    #---------PLUGIN: Hostmanager------------------------------
+    if Vagrant.has_plugin?("vagrant-hostmanager")
+        config.hostmanager.enabled = true
+        config.hostmanager.manage_host = true
+        config.hostmanager.ignore_private_ip = false
+        config.hostmanager.include_offline = true
+    end
+
+
+    #--------------------------------------------
+    # Define Boxes
+    #--------------------------------------------
+    config.vm.define VAGRANT_MACHINE_NAME do |box1|  
+
+
+	    #---------Set Base Box-------------------------------
+        box1.vm.box     = VAGRANT_BOX
+        box1.vm.box_url = VAGRANT_BOX_URL
+
+        #---------Network Setup-------------------------------
+        box1.vm.network :private_network, ip: BOX_PRIVATE_IP
+        box1.vm.host_name = BOX_HOSTNAME
+        if Vagrant.has_plugin?("vagrant-hostmanager")
+            box1.hostmanager.aliases = "*.#{BOX_HOSTNAME}"
+        end
+
+        #---------Shell Setup---------------------------------
+        # avoid "stdin: is not a tty" warnings:
+        #box1.ssh.shell = "bash -c 'BASH_ENV=/etc/profile exec bash'"
+
+        #---------Virtualbox Customizations-------------------
+        box1.vm.provider "virtualbox" do |virtbox|
+          virtbox.customize ["modifyvm", :id, "--memory", "528"]
+          virtbox.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
+          virtbox.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+          #box name in the virtualbox gui
+          #virtbox.customize ["modifyvm", :id, "--name", "Virtualbox GUI Name"]
+        end
+
+        #---------Synced Folders-------------------------------
+        box1.vm.synced_folder WWW_ROOT, "/var/www", 
+            owner: "www-data", 
+            group: "www-data", 
+            mount_options: ["umask=0002","dmask=0002","fmask=0002"]
+
+        #--------------------------------------------
+        #
+        # Provisioning
+        # 
+        #--------------------------------------------
+        #------------Set Flags Dir-----------------------------------
+        $set_flags_dir = <<SCRIPT
+        if [[ ! -d /var/vagrant-provision ]]; then 
+            sudo mkdir /var/vagrant-provision;
+        fi
+SCRIPT
+        box1.vm.provision :shell, :inline => $set_flags_dir
+        #------------Set Timezone-----------------------------
+        $set_timezone = <<SCRIPT
+        if [[ ! -f /var/vagrant-provision/set-timezone ]]; then 
+            echo "#{BOX_TIMEZONE}" | sudo tee /etc/timezone 
+            dpkg-reconfigure --frontend noninteractive tzdata 
+            sudo touch /var/vagrant-provision/set-timezone; 
+        fi
+SCRIPT
+        box1.vm.provision :shell, :inline => $set_timezone
+
+        #------------First Time Provision-----------------------------
+        # Shell provision - make sure apt-get upgrade runs first time
+        #box1.vm.provision :shell, :inline => "if [[ ! -f /var/vagrant-provision/apt-get-upgrade ]]; then sudo apt-get update -y && apt-get upgrade -y && sudo touch /var/vagrant-provision/apt-get-upgrade; fi"
+
+        #------------Main Provisioning--------------------------------
+        #box1.vm.provision "shell", privileged: false, path: "vagrant-provision.sh", args: [BOX_HOSTNAME,BOX_TIMEZONE]
+        box1.vm.provision "shell", path: "vagrant-provision.sh", args: [BOX_HOSTNAME,BOX_TIMEZONE]
+
+    end
+
+    #---------After vagrant up process-----------------------
+    if Vagrant.has_plugin?("vagrant-triggers")
+        config.trigger.after :up, :stdout => true do
+            puts ""
+            puts "Ready to go."
+            puts "Ip Address: #{BOX_PRIVATE_IP}"
+        end
+    end
+
+end
